@@ -189,13 +189,10 @@ def train(model, criterion, criterion_st, optimizer, optimizer_st, scheduler,
 
         # backward decoder
         if c.bidirectional_decoder:
-            if c.loss_masking:
-                decoder_backward_loss = criterion(torch.flip(decoder_backward_output, dims=(1, )), mel_input, mel_lengths)
-            else:
-                decoder_backward_loss = criterion(torch.flip(decoder_backward_output, dims=(1, )), mel_input)
-            decoder_c_loss = torch.nn.functional.l1_loss(torch.flip(decoder_backward_output, dims=(1, )), decoder_output)
-            loss += decoder_backward_loss + decoder_c_loss
-            keep_avg.update_values({'avg_decoder_b_loss': decoder_backward_loss.item(), 'avg_decoder_c_loss': decoder_c_loss.item()})
+            keep_avg.update_values({'avg_decoder_b_loss': loss_dict['decoder_b_loss'].item(),
+                                    'avg_decoder_c_loss': loss_dict['decoder_c_loss'].item()})
+        if c.ga_alpha > 0:
+            keep_avg.update_values({'avg_ga_loss': loss_dict['ga_loss'].item()})
 
         loss.backward()
         optimizer, current_lr = adam_weight_decay(optimizer)
@@ -386,13 +383,10 @@ def evaluate(model, criterion, criterion_st, ap, global_step, epoch):
 
             # backward decoder loss
             if c.bidirectional_decoder:
-                if c.loss_masking:
-                    decoder_backward_loss = criterion(torch.flip(decoder_backward_output, dims=(1, )), mel_input, mel_lengths)
-                else:
-                    decoder_backward_loss = criterion(torch.flip(decoder_backward_output, dims=(1, )), mel_input)
-                decoder_c_loss = torch.nn.functional.l1_loss(torch.flip(decoder_backward_output, dims=(1, )), decoder_output)
-                loss += decoder_backward_loss + decoder_c_loss
-                keep_avg.update_values({'avg_decoder_b_loss': decoder_backward_loss.item(), 'avg_decoder_c_loss': decoder_c_loss.item()})
+                keep_avg.update_values({'avg_decoder_b_loss': loss_dict['decoder_b_loss'].item(),
+                                        'avg_decoder_c_loss': loss_dict['decoder_c_loss'].item()})
+            if c.ga_alpha > 0:
+                keep_avg.update_values({'avg_ga_loss': loss_dict['ga_loss'].item()})
 
             step_time = time.time() - start_time
             epoch_time += step_time
@@ -485,6 +479,7 @@ def evaluate(model, criterion, criterion_st, ap, global_step, epoch):
         print(" | > Synthesizing test sentences")
         speaker_id = 0 if c.use_speaker_embedding else None
         style_wav = c.get("style_wav_for_test")
+        print(style_wav)
         for idx, test_sentence in enumerate(test_sentences):
             try:
                 wav, alignment, decoder_output, postnet_output, stop_tokens = synthesis(
