@@ -6,6 +6,7 @@ import time
 import numpy as np
 import torch
 import yaml
+import pysbd
 
 from TTS.utils.audio import AudioProcessor
 from TTS.utils.io import load_config
@@ -18,29 +19,28 @@ from TTS.utils.synthesis import *
 
 from TTS.utils.text import make_symbols, phonemes, symbols
 
-alphabets = r"([A-Za-z])"
-prefixes = r"(Mr|St|Mrs|Ms|Dr)[.]"
-suffixes = r"(Inc|Ltd|Jr|Sr|Co)"
-starters = r"(Mr|Mrs|Ms|Dr|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)"
-acronyms = r"([A-Z][.][A-Z][.](?:[A-Z][.])?)"
-websites = r"[.](com|net|org|io|gov)"
-
 
 class Synthesizer(object):
     def __init__(self, config):
         self.wavernn = None
         self.vocoder_model = None
         self.config = config
+        print(config)
+        self.seg = self.get_segmenter("en")
         self.use_cuda = self.config.use_cuda
         if self.use_cuda:
             assert torch.cuda.is_available(), "CUDA is not availabe on this machine."
         self.load_tts(self.config.tts_checkpoint, self.config.tts_config,
                       self.config.use_cuda)
-        if self.config.vocoder_file:
+        if self.config.vocoder_checkpoint:
             self.load_vocoder(self.config.vocoder_checkpoint, self.config.vocoder_config, self.config.use_cuda)
         if self.config.wavernn_lib_path:
-            self.load_wavernn(self.config.wavernn_lib_path, self.config.wavernn_file,
+            self.load_wavernn(self.config.wavernn_lib_path, self.config.wavernn_checkpoint,
                               self.config.wavernn_config, self.config.use_cuda)
+
+    @staticmethod
+    def get_segmenter(lang):
+        return pysbd.Segmenter(language=lang, clean=True)
 
     def load_tts(self, tts_checkpoint, tts_config, use_cuda):
         # pylint: disable=global-statement
@@ -131,37 +131,8 @@ class Synthesizer(object):
         wav = np.array(wav)
         self.ap.save_wav(wav, path)
 
-    @staticmethod
-    def split_into_sentences(text):
-        text = " " + text + "  <stop>"
-        text = text.replace("\n", " ")
-        text = re.sub(prefixes, "\\1<prd>", text)
-        text = re.sub(websites, "<prd>\\1", text)
-        if "Ph.D" in text:
-            text = text.replace("Ph.D.", "Ph<prd>D<prd>")
-        text = re.sub(r"\s" + alphabets + "[.] ", " \\1<prd> ", text)
-        text = re.sub(acronyms+" "+starters, "\\1<stop> \\2", text)
-        text = re.sub(alphabets + "[.]" + alphabets + "[.]" + alphabets + "[.]", "\\1<prd>\\2<prd>\\3<prd>", text)
-        text = re.sub(alphabets + "[.]" + alphabets + "[.]", "\\1<prd>\\2<prd>", text)
-        text = re.sub(" "+suffixes+"[.] "+starters, " \\1<stop> \\2", text)
-        text = re.sub(" "+suffixes+"[.]", " \\1<prd>", text)
-        text = re.sub(" " + alphabets + "[.]", " \\1<prd>", text)
-        if "”" in text:
-            text = text.replace(".”", "”.")
-        if "\"" in text:
-            text = text.replace(".\"", "\".")
-        if "!" in text:
-            text = text.replace("!\"", "\"!")
-        if "?" in text:
-            text = text.replace("?\"", "\"?")
-        text = text.replace(".", ".<stop>")
-        text = text.replace("?", "?<stop>")
-        text = text.replace("!", "!<stop>")
-        text = text.replace("<prd>", ".")
-        sentences = text.split("<stop>")
-        sentences = sentences[:-1]
-        sentences = list(filter(None, [s.strip() for s in sentences])) # remove empty sentences
-        return sentences
+    def split_into_sentences(self, text):
+        return self.seg.segment(text)
 
     def tts_wav(self, text, speaker_id=None, style_wav=None):
         wavs = []
