@@ -10,6 +10,7 @@ from TTS.utils.synthesis import synthesis
 from TTS.utils.generic_utils import setup_model
 from TTS.utils.io import load_config
 from TTS.utils.text.symbols import make_symbols, symbols, phonemes
+from TTS.utils.speakers import load_speaker_mapping, get_speakers_embedding
 from TTS.utils.audio import AudioProcessor
 
 
@@ -22,12 +23,15 @@ def tts(model,
         ap_vocoder,
         use_cuda,
         batched_vocoder,
-        speaker_id=None,
+        speaker_embedding=None,
+        style_wav=None,
         figures=False):
+    if style_wav is None:
+        style_wav = C.get("style_wav_for_test")
     t_1 = time.time()
     use_vocoder_model = vocoder_model is not None
     waveform, alignment, _, postnet_output, stop_tokens, _ = synthesis(
-        model, text, C, use_cuda, ap, speaker_id, style_wav=C.gst['gst_style_input'],
+        model, text, C, use_cuda, ap, speaker_embedding=speaker_embedding, style_wav=C.gst['gst_style_input'],
         truncated=False, enable_eos_bos_chars=C.enable_eos_bos_chars,
         use_griffin_lim=(not use_vocoder_model), do_trim_silence=True)
 
@@ -91,10 +95,17 @@ if __name__ == "__main__":
                         help="JSON file for multi-speaker model.",
                         default="")
     parser.add_argument(
-        '--speaker_id',
-        type=int,
-        help="target speaker_id if the model is multi-speaker.",
+        '--speaker_fileid',
+        type=str,
+        help="name of speaker embedding reference present in speakers_json.",
         default=None)
+
+    parser.add_argument(
+        '--style_wav',
+        type=str,
+        help="Path for GST style_wav reference.",
+        default=None)
+
     args = parser.parse_args()
 
     if args.vocoder_path != "":
@@ -114,14 +125,22 @@ if __name__ == "__main__":
 
     # load speakers
     if args.speakers_json != '':
-        speakers = json.load(open(args.speakers_json, 'r'))
-        num_speakers = len(speakers)
+        speaker_mapping = load_speaker_mapping(args.speakers_json)
+        if args.speaker_fileid  is not None:
+            speaker_embedding = speaker_mapping[args.speaker_fileid]['embedding']
+        else:
+            speaker_embedding = speaker_mapping[list(speaker_mapping.keys())[0]]['embedding']
+
+        speaker_embedding_dim = len(speaker_embedding)
+        num_speakers = 2 # its need > 1 for activate multi speaker
     else:
         num_speakers = 0
+        speaker_embedding_dim = None
+        speaker_embedding = None
 
     # load the model
     num_chars = len(phonemes) if C.use_phonemes else len(symbols)
-    model = setup_model(num_chars, num_speakers, C)
+    model = setup_model(num_chars, num_speakers, C, speaker_embedding_dim)
     cp = torch.load(args.model_path)
     model.load_state_dict(cp['model'])
     model.eval()
@@ -170,11 +189,13 @@ if __name__ == "__main__":
                        ap_vocoder,
                        args.use_cuda,
                        args.batched_vocoder,
-                       speaker_id=args.speaker_id,
+                       speaker_embedding=speaker_embedding,
+                       style_wav=args.style_wav,
                        figures=False)
 
     # save the results
     file_name = args.text.replace(" ", "_")
+    file_name = args.speaker_fileid.replace('.wav','')+args.text.replace(" ", "_")
     file_name = file_name.translate(
         str.maketrans('', '', string.punctuation.replace('_', ''))) + '.wav'
     out_path = os.path.join(args.out_path, file_name)

@@ -11,6 +11,8 @@ class TacotronAbstract(ABC, nn.Module):
     def __init__(self,
                  num_chars,
                  num_speakers,
+                 speaker_embedding_dim=256,
+                 speaker_embedding_weights = None,
                  r,
                  postnet_output_dim=80,
                  decoder_output_dim=80,
@@ -35,6 +37,8 @@ class TacotronAbstract(ABC, nn.Module):
         """ Abstract Tacotron class """
         super().__init__()
         self.num_chars = num_chars
+        self.speaker_embedding_dim = speaker_embedding_dim
+        self.speaker_embedding_weights = speaker_embedding_weights
         self.r = r
         self.decoder_output_dim = decoder_output_dim
         self.postnet_output_dim = postnet_output_dim
@@ -152,35 +156,15 @@ class TacotronAbstract(ABC, nn.Module):
     # EMBEDDING FUNCTIONS
     #############################
 
-    def compute_speaker_embedding(self, speaker_ids):
-        """ Compute speaker embedding vectors """
-        if hasattr(self, "speaker_embedding") and speaker_ids is None:
-            raise RuntimeError(
-                " [!] Model has speaker embedding layer but speaker_id is not provided"
-            )
-        if hasattr(self, "speaker_embedding") and speaker_ids is not None:
-            self.speaker_embeddings = self.speaker_embedding(speaker_ids).unsqueeze(1)
-        if hasattr(self, "speaker_project_mel") and speaker_ids is not None:
-            self.speaker_embeddings_projected = self.speaker_project_mel(
-                self.speaker_embeddings).squeeze(1)
-
     def compute_gst(self, inputs, mel_specs):
         """ Compute global style token """
         # pylint: disable=not-callable
         gst_outputs = self.gst_layer(mel_specs)
         inputs = self._add_speaker_embedding(inputs, gst_outputs)
-        return inputs
-
-    @staticmethod
-    def _add_speaker_embedding(outputs, speaker_embeddings):
-        speaker_embeddings_ = speaker_embeddings.expand(
-            outputs.size(0), outputs.size(1), -1)
-        outputs = outputs + speaker_embeddings_
-        return outputs
+        return inputs, gst_outputs
 
     @staticmethod
     def _concat_speaker_embedding(outputs, speaker_embeddings):
-        speaker_embeddings_ = speaker_embeddings.expand(
-            outputs.size(0), outputs.size(1), -1)
+        speaker_embeddings_ = speaker_embeddings.expand(outputs.size(0), outputs.size(1), -1)
         outputs = torch.cat([outputs, speaker_embeddings_], dim=-1)
         return outputs

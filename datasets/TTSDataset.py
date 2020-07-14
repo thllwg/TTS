@@ -24,6 +24,7 @@ class MyDataset(Dataset):
                  phoneme_cache_path=None,
                  phoneme_language="en-us",
                  enable_eos_bos=False,
+                 speaker_mapping=None,
                  verbose=False):
         """
         Args:
@@ -58,6 +59,7 @@ class MyDataset(Dataset):
         self.phoneme_cache_path = phoneme_cache_path
         self.phoneme_language = phoneme_language
         self.enable_eos_bos = enable_eos_bos
+        self.speaker_mapping = speaker_mapping
         self.verbose = verbose
         if use_phonemes and not os.path.isdir(phoneme_cache_path):
             os.makedirs(phoneme_cache_path, exist_ok=True)
@@ -127,7 +129,8 @@ class MyDataset(Dataset):
             'text': text,
             'wav': wav,
             'item_idx': self.items[idx][1],
-            'speaker_name': speaker_name
+            'speaker_name': speaker_name,
+            'wav_file_name': os.path.basename(wav_file)
         }
         return sample
 
@@ -194,6 +197,13 @@ class MyDataset(Dataset):
             speaker_name = [batch[idx]['speaker_name']
                             for idx in ids_sorted_decreasing]
 
+            wav_files_names = [batch[idx]['wav_file_name'] for idx in ids_sorted_decreasing]
+            if self.speaker_mapping  is not None:                              
+                # get speaker embeddings        
+                speaker_embedding = [self.speaker_mapping[w]['embedding'] for w in wav_files_names]
+            else:
+                speaker_embedding = None
+
             # compute features
             mel = [self.ap.melspectrogram(w).astype('float32') for w in wav]
 
@@ -222,6 +232,8 @@ class MyDataset(Dataset):
             text = torch.LongTensor(text)
             mel = torch.FloatTensor(mel).contiguous()
             mel_lengths = torch.LongTensor(mel_lengths)
+            if speaker_embedding  is not None:
+                speaker_embedding = torch.FloatTensor(speaker_embedding)
             stop_targets = torch.FloatTensor(stop_targets)
 
             # compute linear spectrogram
@@ -233,8 +245,8 @@ class MyDataset(Dataset):
                 linear = torch.FloatTensor(linear).contiguous()
             else:
                 linear = None
-            return text, text_lenghts, speaker_name, linear, mel, mel_lengths, \
+            return text, text_lenghts, speaker_name, speaker_embedding, linear, mel, mel_lengths, \
                    stop_targets, item_idxs
 
         raise TypeError(("batch must contain tensors, numbers, dicts or lists;\
-                         found {}".format(type(batch[0]))))
+                        found {}".format(type(batch[0]))))

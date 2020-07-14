@@ -25,7 +25,7 @@ from TTS.utils.training import (NoamLR, check_update, adam_weight_decay,
 from TTS.utils.tensorboard_logger import TensorboardLogger
 from TTS.utils.console_logger import ConsoleLogger
 from TTS.utils.speakers import load_speaker_mapping, save_speaker_mapping, \
-    get_speakers
+    get_speakers, get_speakers_embedding, get_speakers_id
 from TTS.utils.synthesis import synthesis
 from TTS.utils.text.symbols import make_symbols, phonemes, symbols
 from TTS.utils.visual import plot_alignment, plot_spectrogram
@@ -33,11 +33,15 @@ from TTS.datasets.preprocess import load_meta_data
 from TTS.utils.radam import RAdam
 from TTS.utils.measures import alignment_diagonal_score
 
+from random import randrange
+
 
 use_cuda, num_gpus = setup_torch_training_env(True, False)
 
+speaker_mapping = {}
 
 def setup_loader(ap, r, is_val=False, verbose=False):
+    global speaker_mapping
     if is_val and not c.run_eval:
         loader = None
     else:
@@ -54,6 +58,7 @@ def setup_loader(ap, r, is_val=False, verbose=False):
             max_seq_len=c.max_seq_len,
             phoneme_cache_path=c.phoneme_cache_path,
             use_phonemes=c.use_phonemes,
+            speaker_mapping = speaker_mapping if c.use_speaker_embedding else None
             phoneme_language=c.phoneme_language,
             enable_eos_bos=c.enable_eos_bos_chars,
             verbose=verbose)
@@ -72,27 +77,25 @@ def setup_loader(ap, r, is_val=False, verbose=False):
 
 
 def format_data(data):
-    if c.use_speaker_embedding:
-        speaker_mapping = load_speaker_mapping(OUT_PATH)
+    '''if c.use_speaker_embedding:
+        speaker_mapping = load_speaker_mapping(OUT_PATH)'''
 
     # setup input data
     text_input = data[0]
     text_lengths = data[1]
     speaker_names = data[2]
-    linear_input = data[3] if c.model in ["Tacotron"] else None
-    mel_input = data[4]
-    mel_lengths = data[5]
-    stop_targets = data[6]
+
+    linear_input = data[4] if c.model in ["Tacotron"] else None
+    mel_input = data[5]
+    mel_lengths = data[6]
+    stop_targets = data[7]
     avg_text_length = torch.mean(text_lengths.float())
     avg_spec_length = torch.mean(mel_lengths.float())
 
     if c.use_speaker_embedding:
-        speaker_ids = [
-            speaker_mapping[speaker_name] for speaker_name in speaker_names
-        ]
-        speaker_ids = torch.LongTensor(speaker_ids)
+        speaker_embeddings = data[3]
     else:
-        speaker_ids = None
+        speaker_embeddings = None
 
     # set stop targets view, we predict a single stop token per iteration.
     stop_targets = stop_targets.view(text_input.shape[0],
@@ -108,9 +111,9 @@ def format_data(data):
         mel_lengths = mel_lengths.cuda(non_blocking=True)
         linear_input = linear_input.cuda(non_blocking=True) if c.model in ["Tacotron"] else None
         stop_targets = stop_targets.cuda(non_blocking=True)
-        if speaker_ids is not None:
-            speaker_ids = speaker_ids.cuda(non_blocking=True)
-    return text_input, text_lengths, mel_input, mel_lengths, linear_input, stop_targets, speaker_ids, avg_text_length, avg_spec_length
+        if speaker_embeddings is not None:
+            speaker_embeddings = speaker_embeddings.cuda(non_blocking=True)
+    return text_input, text_lengths, mel_input, mel_lengths, linear_input, stop_targets, speaker_embeddings, avg_text_length, avg_spec_length
 
 
 def train(model, criterion, optimizer, optimizer_st, scheduler,
@@ -131,7 +134,7 @@ def train(model, criterion, optimizer, optimizer_st, scheduler,
         start_time = time.time()
 
         # format data
-        text_input, text_lengths, mel_input, mel_lengths, linear_input, stop_targets, speaker_ids, avg_text_length, avg_spec_length = format_data(data)
+        text_input, text_lengths, mel_input, mel_lengths, linear_input, stop_targets, speaker_embeddings, avg_text_length, avg_spec_length = format_data(data)
         loader_time = time.time() - end_time
 
         global_step += 1
@@ -146,10 +149,10 @@ def train(model, criterion, optimizer, optimizer_st, scheduler,
         # forward pass model
         if c.bidirectional_decoder or c.double_decoder_consistency:
             decoder_output, postnet_output, alignments, stop_tokens, decoder_backward_output, alignments_backward = model(
-                text_input, text_lengths, mel_input, mel_lengths, speaker_ids=speaker_ids)
+                text_input, text_lengths, mel_input, mel_lengths, speaker_embeddings=speaker_embeddings)
         else:
             decoder_output, postnet_output, alignments, stop_tokens = model(
-                text_input, text_lengths, mel_input, mel_lengths, speaker_ids=speaker_ids)
+                text_input, text_lengths, mel_input, mel_lengths, speaker_embeddings=speaker_embeddings)
             decoder_backward_output = None
             alignments_backward = None
 
@@ -282,6 +285,7 @@ def train(model, criterion, optimizer, optimizer_st, scheduler,
 
 @torch.no_grad()
 def evaluate(model, criterion, ap, global_step, epoch):
+    global speaker_mapping
     data_loader = setup_loader(ap, model.decoder.r, is_val=True)
     model.eval()
     epoch_time = 0
@@ -292,16 +296,16 @@ def evaluate(model, criterion, ap, global_step, epoch):
             start_time = time.time()
 
             # format data
-            text_input, text_lengths, mel_input, mel_lengths, linear_input, stop_targets, speaker_ids, _, _ = format_data(data)
+            text_input, text_lengths, mel_input, mel_lengths, linear_input, stop_targets, speaker_embeddings, _, _ = format_data(data)
             assert mel_input.shape[1] % model.decoder.r == 0
 
             # forward pass model
             if c.bidirectional_decoder or c.double_decoder_consistency:
                 decoder_output, postnet_output, alignments, stop_tokens, decoder_backward_output, alignments_backward = model(
-                    text_input, text_lengths, mel_input, speaker_ids=speaker_ids)
+                    text_input, text_lengths, mel_input, speaker_embeddings=speaker_embeddings)
             else:
                 decoder_output, postnet_output, alignments, stop_tokens = model(
-                    text_input, text_lengths, mel_input, speaker_ids=speaker_ids)
+                    text_input, text_lengths, mel_input, speaker_embeddings=speaker_embeddings)
                 decoder_backward_output = None
                 alignments_backward = None
 
@@ -399,8 +403,14 @@ def evaluate(model, criterion, ap, global_step, epoch):
         test_audios = {}
         test_figures = {}
         print(" | > Synthesizing test sentences")
-        speaker_id = 0 if c.use_speaker_embedding else None
-        style_wav = c.get("style_wav_for_test")
+        if c.use_speaker_embedding:
+            speaker_embedding = speaker_mapping[list(speaker_mapping.keys())[randrange(len(speaker_mapping)-1)]]['embedding'] if c.use_speaker_embedding else None
+        else:
+            speaker_embedding = None
+        if c.use_gst:
+            style_wav = c.get("style_wav_for_test")
+        else:
+            style_wav = None
         for idx, test_sentence in enumerate(test_sentences):
             try:
                 wav, alignment, decoder_output, postnet_output, stop_tokens, inputs = synthesis(
@@ -409,7 +419,7 @@ def evaluate(model, criterion, ap, global_step, epoch):
                     c,
                     use_cuda,
                     ap,
-                    speaker_id=speaker_id,
+                    speaker_embedding=speaker_embedding,
                     style_wav=style_wav,
                     truncated=False,
                     enable_eos_bos_chars=c.enable_eos_bos_chars, #pylint: disable=unused-argument
@@ -438,7 +448,7 @@ def evaluate(model, criterion, ap, global_step, epoch):
 # FIXME: move args definition/parsing inside of main?
 def main(args):  # pylint: disable=redefined-outer-name
     # pylint: disable=global-variable-undefined
-    global meta_data_train, meta_data_eval, symbols, phonemes
+    global meta_data_train, meta_data_eval, symbols, phonemes, speaker_mapping
     # Audio processor
     ap = AudioProcessor(**c.audio)
     if 'characters' in c.keys():
@@ -453,26 +463,26 @@ def main(args):  # pylint: disable=redefined-outer-name
     # load data instances
     meta_data_train, meta_data_eval = load_meta_data(c.datasets)
 
+    speaker_embedding_dim = None
+    speaker_embedding_weights = None
+
     # parse speakers
     if c.use_speaker_embedding:
-        speakers = get_speakers(meta_data_train)
         if args.restore_path:
             prev_out_path = os.path.dirname(args.restore_path)
             speaker_mapping = load_speaker_mapping(prev_out_path)
-            assert all([speaker in speaker_mapping
-                        for speaker in speakers]), "As of now you, you cannot " \
-                                                   "introduce new speakers to " \
-                                                   "a previously trained model."
+        elif c.speaker_embedding_file:
+            speaker_mapping = load_speaker_mapping(c.speaker_embedding_file)
         else:
-            speaker_mapping = {name: i for i, name in enumerate(speakers)}
+            raise "You need pass a speaker embedding file, run  GE2E-Speaker_Encoder- ExtractSpeakerEmbeddings-by-sample.ipynb notebook in notebooks folder"            
+        num_speakers = len(get_speakers(meta_data_train))
         save_speaker_mapping(OUT_PATH, speaker_mapping)
-        num_speakers = len(speaker_mapping)
-        print("Training with {} speakers: {}".format(num_speakers,
-                                                     ", ".join(speakers)))
+       
+       speaker_embedding_dim = len(speaker_mapping[list(speaker_mapping.keys())[0]]['embedding']) 
     else:
         num_speakers = 0
 
-    model = setup_model(num_chars, num_speakers, c)
+    model = setup_model(num_chars, num_speakers, c, speaker_embedding_dim)
 
     params = set_weight_decay(model, c.wd)
     optimizer = RAdam(params, lr=c.lr, weight_decay=0)
