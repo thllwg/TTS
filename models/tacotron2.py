@@ -28,7 +28,10 @@ class Tacotron2(TacotronAbstract):
                  bidirectional_decoder=False,
                  double_decoder_consistency=False,
                  ddc_r=None,
-                 gst=False):
+                 gst=False,
+                 gst_embedding_dim=512,
+                 gst_num_heads=4,
+                 gst_style_tokens=10):
         super(Tacotron2,
               self).__init__(num_chars, num_speakers, r, postnet_output_dim,
                              decoder_output_dim, attn_type, attn_win,
@@ -37,26 +40,34 @@ class Tacotron2(TacotronAbstract):
                              location_attn, attn_K, separate_stopnet,
                              bidirectional_decoder, double_decoder_consistency,
                              ddc_r, gst)
-        decoder_in_features = 512 if num_speakers > 1 else 512
+
+        # init layer dims
+        speaker_embedding_dim = 512 if num_speakers > 1 else 0
+        gst_embedding_dim = gst_embedding_dim if self.gst else 0
+        decoder_in_features = 512+speaker_embedding_dim+gst_embedding_dim
         encoder_in_features = 512 if num_speakers > 1 else 512
         proj_speaker_dim = 80 if num_speakers > 1 else 0
-        # base layers
+
+        # embedding layer
         self.embedding = nn.Embedding(num_chars, 512, padding_idx=0)
+
+        # speaker embedding layer
         if num_speakers > 1:
-            self.speaker_embedding = nn.Embedding(num_speakers, 512)
+            self.speaker_embedding = nn.Embedding(num_speakers, speaker_embedding_dim)
             self.speaker_embedding.weight.data.normal_(0, 0.3)
+
         self.encoder = Encoder(encoder_in_features)
         self.decoder = Decoder(decoder_in_features, self.decoder_output_dim, r, attn_type, attn_win,
                                attn_norm, prenet_type, prenet_dropout,
                                forward_attn, trans_agent, forward_attn_mask,
                                location_attn, attn_K, separate_stopnet, proj_speaker_dim)
         self.postnet = Postnet(self.postnet_output_dim)
+
         # global style token layers
         if self.gst:
-            gst_embedding_dim = encoder_in_features
             self.gst_layer = GST(num_mel=80,
-                                 num_heads=4,
-                                 num_style_tokens=10,
+                                 num_heads=gst_num_heads,
+                                 num_style_tokens=gst_style_tokens,
                                  embedding_dim=gst_embedding_dim)
         # backward pass decoder
         if self.bidirectional_decoder:
@@ -75,8 +86,25 @@ class Tacotron2(TacotronAbstract):
         mel_outputs_postnet = mel_outputs_postnet.transpose(1, 2)
         return mel_outputs, mel_outputs_postnet, alignments
 
+    def compute_gst(self, inputs, style_input):
+        """ Compute global style token """
+        device = inputs.device
+        if isinstance(style_input, dict):
+            query = torch.zeros(1, 1, self.gst_embedding_dim//2).to(device)
+            _GST = torch.tanh(self.gst_layer.style_token_layer.style_tokens)
+            gst_outputs = torch.zeros(1, 1, self.gst_embedding_dim).to(device)
+            for k_token, v_amplifier in style_input.items():
+                key = _GST[int(k_token)].unsqueeze(0).expand(1, -1, -1)
+                gst_outputs_att = self.gst_layer.style_token_layer.attention(query, key)
+                gst_outputs = gst_outputs + gst_outputs_att * v_amplifier
+        elif style_input is None:
+            gst_outputs = torch.zeros(1, 1, self.gst_embedding_dim).to(device)
+        else:
+            gst_outputs = self.gst_layer(style_input) # pylint: disable=not-callable
+        embedded_gst = gst_outputs.repeat(1, inputs.size(1), 1)
+        return inputs, embedded_gst
+
     def forward(self, text, text_lengths, mel_specs=None, mel_lengths=None, speaker_ids=None):
-        self._init_states()
         # compute mask for padding
         # B x T_in_max (boolean)
         input_mask, output_mask = self.compute_masks(text_lengths, mel_lengths)
@@ -84,20 +112,24 @@ class Tacotron2(TacotronAbstract):
         embedded_inputs = self.embedding(text).transpose(1, 2)
         # B x T_in_max x D_en
         encoder_outputs = self.encoder(embedded_inputs, text_lengths)
-        # adding speaker embeddding to encoder output
-        # TODO: multi-speaker
-        # B x speaker_embed_dim
-        if speaker_ids is not None:
-            self.compute_speaker_embedding(speaker_ids)
+
         if self.num_speakers > 1:
-            # B x T_in x embed_dim + speaker_embed_dim
-            encoder_outputs = self._add_speaker_embedding(encoder_outputs,
-                                                          self.speaker_embeddings)
+            embedded_speakers = self.speaker_embedding(speaker_ids)[:, None]
+            embedded_speakers = embedded_speakers.repeat(1, encoder_outputs.size(1), 1)
+            if self.gst:
+                # B x gst_dim
+                encoder_outputs, embedded_gst = self.compute_gst(encoder_outputs, mel_specs)
+                encoder_outputs = torch.cat([encoder_outputs, embedded_gst, embedded_speakers], dim=-1)
+            else:
+                encoder_outputs = torch.cat([encoder_outputs, embedded_speakers], dim=-1)
+        else:
+            if self.gst:
+                # B x gst_dim
+                encoder_outputs, embedded_gst = self.compute_gst(encoder_outputs, mel_specs)
+                encoder_outputs = torch.cat([encoder_outputs, embedded_gst], dim=-1)
+
         encoder_outputs = encoder_outputs * input_mask.unsqueeze(2).expand_as(encoder_outputs)
-        # global style token
-        if self.gst:
-            # B x gst_dim
-            encoder_outputs = self.compute_gst(encoder_outputs, mel_specs)
+
         # B x mel_dim x T_out -- B x T_out//r x T_in -- B x T_out//r
         decoder_outputs, alignments, stop_tokens = self.decoder(
             encoder_outputs, mel_specs, input_mask)
@@ -122,14 +154,25 @@ class Tacotron2(TacotronAbstract):
         return decoder_outputs, postnet_outputs, alignments, stop_tokens
 
     @torch.no_grad()
-    def inference(self, text, speaker_ids=None):
+    def inference(self, text, speaker_ids=None, style_mel=None):
         embedded_inputs = self.embedding(text).transpose(1, 2)
         encoder_outputs = self.encoder.inference(embedded_inputs)
-        if speaker_ids is not None:
-            self.compute_speaker_embedding(speaker_ids)
+
         if self.num_speakers > 1:
-            encoder_outputs = self._add_speaker_embedding(encoder_outputs,
-                                                          self.speaker_embeddings)
+            embedded_speakers = self.speaker_embedding(speaker_ids)[:, None]
+            embedded_speakers = embedded_speakers.repeat(1, encoder_outputs.size(1), 1)
+            if self.gst:
+                # B x gst_dim
+                encoder_outputs, embedded_gst = self.compute_gst(encoder_outputs, style_mel)
+                encoder_outputs = torch.cat([encoder_outputs, embedded_gst, embedded_speakers], dim=-1)
+            else:
+                encoder_outputs = torch.cat([encoder_outputs, embedded_speakers], dim=-1)
+        else:
+            if self.gst:
+                # B x gst_dim
+                encoder_outputs, embedded_gst = self.compute_gst(encoder_outputs, style_mel)
+                encoder_outputs = torch.cat([encoder_outputs, embedded_gst], dim=-1)
+
         decoder_outputs, alignments, stop_tokens = self.decoder.inference(
             encoder_outputs)
         postnet_outputs = self.postnet(decoder_outputs)
@@ -138,14 +181,28 @@ class Tacotron2(TacotronAbstract):
             decoder_outputs, postnet_outputs, alignments)
         return decoder_outputs, postnet_outputs, alignments, stop_tokens
 
-    def inference_truncated(self, text, speaker_ids=None):
+    def inference_truncated(self, text, speaker_ids=None, style_mel=None):
         """
         Preserve model states for continuous inference
         """
         embedded_inputs = self.embedding(text).transpose(1, 2)
         encoder_outputs = self.encoder.inference_truncated(embedded_inputs)
-        encoder_outputs = self._add_speaker_embedding(encoder_outputs,
-                                                      speaker_ids)
+
+        if self.num_speakers > 1:
+            embedded_speakers = self.speaker_embedding(speaker_ids)[:, None]
+            embedded_speakers = embedded_speakers.repeat(1, encoder_outputs.size(1), 1)
+            if self.gst:
+                # B x gst_dim
+                encoder_outputs, embedded_gst = self.compute_gst(encoder_outputs, style_mel)
+                encoder_outputs = torch.cat([encoder_outputs, embedded_gst, embedded_speakers], dim=-1)
+            else:
+                encoder_outputs = torch.cat([encoder_outputs, embedded_speakers], dim=-1)
+        else:
+            if self.gst:
+                # B x gst_dim
+                encoder_outputs, embedded_gst = self.compute_gst(encoder_outputs, style_mel)
+                encoder_outputs = torch.cat([encoder_outputs, embedded_gst], dim=-1)
+
         mel_outputs, alignments, stop_tokens = self.decoder.inference_truncated(
             encoder_outputs)
         mel_outputs_postnet = self.postnet(mel_outputs)
@@ -153,17 +210,3 @@ class Tacotron2(TacotronAbstract):
         mel_outputs, mel_outputs_postnet, alignments = self.shape_outputs(
             mel_outputs, mel_outputs_postnet, alignments)
         return mel_outputs, mel_outputs_postnet, alignments, stop_tokens
-
-
-    def _speaker_embedding_pass(self, encoder_outputs, speaker_ids):
-        # TODO: multi-speaker
-        # if hasattr(self, "speaker_embedding") and speaker_ids is None:
-        #     raise RuntimeError(" [!] Model has speaker embedding layer but speaker_id is not provided")
-        # if hasattr(self, "speaker_embedding") and speaker_ids is not None:
-
-        #     speaker_embeddings = speaker_embeddings.expand(encoder_outputs.size(0),
-        #                                                    encoder_outputs.size(1),
-        #                                                    -1)
-        #     encoder_outputs = encoder_outputs + speaker_embeddings
-        # return encoder_outputs
-        pass

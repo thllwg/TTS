@@ -2,7 +2,6 @@ import os
 import copy
 import torch
 import unittest
-import numpy as np
 
 from torch import optim
 from torch import nn
@@ -21,8 +20,9 @@ c = load_config(os.path.join(file_path, 'test_config.json'))
 
 
 class TacotronTrainTest(unittest.TestCase):
-    def test_train_step(self):
-        input = torch.randint(0, 24, (8, 128)).long().to(device)
+    @staticmethod
+    def test_train_step():
+        input_dummy = torch.randint(0, 24, (8, 128)).long().to(device)
         input_lengths = torch.randint(100, 128, (8, )).long().to(device)
         input_lengths = torch.sort(input_lengths, descending=True)[0]
         mel_spec = torch.rand(8, 30, c.audio['num_mels']).to(device)
@@ -35,7 +35,7 @@ class TacotronTrainTest(unittest.TestCase):
         for idx in mel_lengths:
             stop_targets[:, int(idx.item()):, 0] = 1.0
 
-        stop_targets = stop_targets.view(input.shape[0],
+        stop_targets = stop_targets.view(input_dummy.shape[0],
                                          stop_targets.size(1) // c.r, -1)
         stop_targets = (stop_targets.sum(2) > 0.0).unsqueeze(2).float().squeeze()
 
@@ -52,7 +52,7 @@ class TacotronTrainTest(unittest.TestCase):
         optimizer = optim.Adam(model.parameters(), lr=c.lr)
         for i in range(5):
             mel_out, mel_postnet_out, align, stop_tokens = model.forward(
-                input, input_lengths, mel_spec, mel_lengths, speaker_ids)
+                input_dummy, input_lengths, mel_spec, mel_lengths, speaker_ids)
             assert torch.sigmoid(stop_tokens).data.max() <= 1.0
             assert torch.sigmoid(stop_tokens).data.min() >= 0.0
             optimizer.zero_grad()
