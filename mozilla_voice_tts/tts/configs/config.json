@@ -1,7 +1,7 @@
 {
     "model": "Tacotron2",
-    "run_name": "ljspeech-ddc-bn",
-    "run_description": "tacotron2 with ddc and batch-normalization",
+    "run_name": "libritts_360_100-gst-ddc-bn",
+    "run_description": "tacotron2 trained on LibriTTS 360 and 100 with GST, DDC and batch-normalization on thllwgTTS dev",
 
     // AUDIO PARAMETERS
     "audio":{
@@ -13,8 +13,8 @@
         "frame_shift_ms": null,  // stft window hop-lengh in ms. If null, 'hop_length' is used.
 
         // Audio processing parameters
-        "sample_rate": 22050,   // DATASET-RELATED: wav sample-rate.
-        "preemphasis": 0.0,     // pre-emphasis to reduce spec noise and make it more structured. If 0.0, no -pre-emphasis.
+        "sample_rate": 24000,   // DATASET-RELATED: wav sample-rate.
+        "preemphasis": 0.98,     // pre-emphasis to reduce spec noise and make it more structured. If 0.0, no -pre-emphasis.
         "ref_level_db": 20,     // reference level db, theoretically 20db is the sound of air.
 
         // Silence trimming
@@ -64,14 +64,14 @@
     "batch_size": 32,       // Batch size for training. Lower values than 32 might cause hard to learn attention. It is overwritten by 'gradual_training'.
     "eval_batch_size":16,
     "r": 7,                 // Number of decoder frames to predict per iteration. Set the initial values if gradual training is enabled.
-    "gradual_training": [[0, 7, 64], [1, 5, 64], [50000, 3, 32], [130000, 2, 32], [290000, 1, 32]], //set gradual training steps [first_step, r, batch_size]. If it is null, gradual training is disabled. For Tacotron, you might need to reduce the 'batch_size' as you proceeed.
+    "gradual_training": [[0, 7, 64], [1, 5, 64], [75000, 3, 40], [160000, 2, 40], [450000, 1, 24]], //set gradual training steps [first_step, r, batch_size]. If it is null, gradual training is disabled. For Tacotron, you might need to reduce the 'batch_size' as you proceeed.
     "loss_masking": true,         // enable / disable loss masking against the sequence padding.
     "ga_alpha": 10.0,        // weight for guided attention loss. If > 0, guided attention is enabled.
     "apex_amp_level": null, // level of optimization with NVIDIA's apex feature for automatic mixed FP16/FP32 precision (AMP), NOTE: currently only O1 is supported, and use "O1" to activate.
 
     // VALIDATION
     "run_eval": true,
-    "test_delay_epochs": 10,  //Until attention is aligned, testing only wastes computation time.
+    "test_delay_epochs": 1,  //Until attention is aligned, testing only wastes computation time.
     "test_sentences_file": null,  // set a file to load sentences to be used for testing. If it is null then we use default english sentences.
 
     // OPTIMIZER
@@ -123,10 +123,10 @@
     "max_seq_len": 153,     // DATASET-RELATED: maximum text length
 
     // PATHS
-    "output_path": "../../Mozilla-TTS/vctk-test/",
+    "output_path": "/home/dobby/models/multi/LibriTTS/",
 
     // PHONEMES
-    "phoneme_cache_path": "../../Mozilla-TTS/vctk-test/",  // phoneme computation is slow, therefore, it caches results in the given folder.
+    "phoneme_cache_path": "/home/dobby/phonemes/mozilla_us_phonemes_3",  // phoneme computation is slow, therefore, it caches results in the given folder.
     "use_phonemes": true,           // use phonemes instead of raw characters. It is suggested for better pronounciation.
     "phoneme_language": "en-us",     // depending on your target language, pick one from  https://github.com/bootphon/phonemizer#languages
 
@@ -136,7 +136,7 @@
     "external_speaker_embedding_file": "../../speakers-vctk-en.json", // if not null and use_external_speaker_embedding_file is true, it is used to load a specific embedding file and thus uses these embeddings instead of nn.embeddings, that is, it supports external embeddings such as those used at: https://arxiv.org/abs /1806.04558
     "use_gst": true,       			    // use global style tokens
     "gst":	{			                // gst parameter if gst is enabled
-        "gst_style_input": null,        // Condition the style input either on a
+        "gst_style_input": "/home/dobby/03-01-05-02-02-02-01.wav",        // Condition the style input either on a
                                         // -> wave file [path to wave] or
                                         // -> dictionary using the style tokens {'token1': 'value', 'token2': 'value'} example {"0": 0.15, "1": 0.15, "5": -0.15}
                                         // with the dictionary being len(dict) <= len(gst_style_tokens).
@@ -149,9 +149,15 @@
     "datasets":   // List of datasets. They all merged and they get different speaker_ids.
         [
             {
-                "name": "vctk",
-                "path": "../../../datasets/VCTK-Corpus-removed-silence/",
-                "meta_file_train": ["p225", "p234", "p238", "p245", "p248", "p261", "p294", "p302", "p326", "p335", "p347"], // for vtck if list, ignore speakers id in list for train, its useful for test cloning with new speakers
+                "name": "libri_tts",
+                "path": "/home/dobby/datasets/LibriTTS/train-clean-360/",
+                "meta_file_train": null,
+                "meta_file_val": null
+            },
+            {
+                "name": "libri_tts",
+                "path": "/home/dobby/datasets/LibriTTS/train-clean-100/",
+                "meta_file_train": null,
                 "meta_file_val": null
             }
         ]
