@@ -132,14 +132,21 @@ class Synthesizer(object):
     def split_into_sentences(self, text):
         return self.seg.segment(text)
 
-    def tts(self, text, speaker_id=None):
-        start_time = time.time()
+
+    def tts_wav(self, text, speaker_id=None, style_wav=None):
         wavs = []
         sens = self.split_into_sentences(text)
         print(sens)
+
+        # process speaker
         speaker_id = id_to_torch(speaker_id)
         if speaker_id is not None and self.use_cuda:
             speaker_id = speaker_id.cuda()
+
+        # process style
+        style_mel = None
+        if style_wav is not None:
+            style_mel = compute_style_mel(style_wav, self.ap)
 
         for sen in sens:
             # preprocess the given text
@@ -147,7 +154,7 @@ class Synthesizer(object):
             inputs = numpy_to_torch(inputs, torch.long, cuda=self.use_cuda)
             inputs = inputs.unsqueeze(0)
             # synthesize voice
-            _, postnet_output, _, _ = run_model_torch(self.tts_model, inputs, self.tts_config, False, speaker_id, None)
+            _, postnet_output, _, _ = run_model_torch(self.tts_model, inputs, self.tts_config, False, speaker_id, style_mel)
             if self.vocoder_model:
                 # use native vocoder model
                 vocoder_input = postnet_output[0].transpose(0, 1).unsqueeze(0)
@@ -182,6 +189,14 @@ class Synthesizer(object):
             wavs += list(wav)
             wavs += [0] * 10000
 
+        return wavs
+
+        
+def tts(self, text, speaker_id=None, style_wav=None):
+        start_time = time.time()
+        
+        wavs = self.tts_wav(text, speaker_id, style_wav)
+
         out = io.BytesIO()
         self.save_wav(wavs, out)
 
@@ -190,4 +205,5 @@ class Synthesizer(object):
         audio_time = len(wavs) / self.tts_config.audio['sample_rate']
         print(f" > Processing time: {process_time}")
         print(f" > Real-time factor: {process_time / audio_time}")
+
         return out
