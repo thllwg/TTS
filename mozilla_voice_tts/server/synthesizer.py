@@ -177,7 +177,7 @@ class Synthesizer(object):
             inputs = numpy_to_torch(inputs, torch.long, cuda=self.use_cuda)
             inputs = inputs.unsqueeze(0)
             # synthesize voice
-            _, postnet_output, _, _ = run_model_torch(self.tts_model, inputs, self.tts_config, False, speaker_id, style_mel, speaker_embeddings)
+            _, postnet_output, _, _ = run_model_torch(self.tts_model, inputs, self.tts_config, False, speaker_id, style_mel, speaker_embedding)
             if self.vocoder_model:
                 # use native vocoder model
                 vocoder_input = postnet_output[0].transpose(0, 1).unsqueeze(0)
