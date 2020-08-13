@@ -60,12 +60,29 @@ class Synthesizer(object):
         else:
             self.input_size = len(symbols)
         # TODO: fix this for multi-speaker model - load speakers
+        # multi-speaker model - load speakers
+        speaker_embedding = None
+        speaker_embedding_dim = None
+        num_speakers = 0
+        
+        # load speakers
+        if self.config.tts_speakers is not None:
+            speaker_mapping = json.load(open(self.config.tts_speakers, 'r'))
+            num_speakers = len(speaker_mapping)
+            if self.tts_config.use_external_speaker_embedding_file:
+                #if self.config.speaker_fileid is not None:
+                #    speaker_embedding = speaker_mapping[args.speaker_fileid]['embedding']
+                #else: # if speaker_fileid is not specificated use the first sample in speakers.json
+                #    speaker_embedding = speaker_mapping[list(speaker_mapping.keys())[0]]['embedding']
+                speaker_embedding = speaker_mapping[list(speaker_mapping.keys())[0]]['embedding']
+                speaker_embedding_dim = len(speaker_embedding)
+
         if self.config.tts_speakers is not None:
             self.tts_speakers = load_speaker_mapping(self.config.tts_speakers)
             num_speakers = len(self.tts_speakers)
         else:
             num_speakers = 0
-        self.tts_model = setup_model(self.input_size, num_speakers=num_speakers, c=self.tts_config)
+        self.tts_model = setup_model(self.input_size, num_speakers=num_speakers, c=self.tts_config, speaker_embedding_dim)
         # load model state
         cp = torch.load(tts_checkpoint, map_location=torch.device('cpu'))
         # load the model
@@ -133,15 +150,19 @@ class Synthesizer(object):
         return self.seg.segment(text)
 
 
-    def tts_wav(self, text, speaker_id=None, style_wav=None):
+    def tts_wav(self, text, speaker_id=None, style_wav=None, speaker_embedding=None):
         wavs = []
         sens = self.split_into_sentences(text)
         print(sens)
 
-        # process speaker
-        speaker_id = id_to_torch(speaker_id)
-        if speaker_id is not None and self.use_cuda:
-            speaker_id = speaker_id.cuda()
+        if speaker_id is not None:
+            speaker_id = id_to_torch(speaker_id, cuda=self.use_cuda)
+
+        if speaker_embedding is not None:
+            speaker_embedding = embedding_to_torch(speaker_embedding, cuda=self.use_cuda)
+
+        #if not isinstance(style_mel, dict):
+        #    style_mel = numpy_to_torch(style_mel, torch.float, cuda=use_cuda)
 
         # process style
         style_mel = None
@@ -154,7 +175,7 @@ class Synthesizer(object):
             inputs = numpy_to_torch(inputs, torch.long, cuda=self.use_cuda)
             inputs = inputs.unsqueeze(0)
             # synthesize voice
-            _, postnet_output, _, _ = run_model_torch(self.tts_model, inputs, self.tts_config, False, speaker_id, style_mel)
+            _, postnet_output, _, _ = run_model_torch(self.tts_model, inputs, self.tts_config, False, speaker_id, style_mel, speaker_embeddings)
             if self.vocoder_model:
                 # use native vocoder model
                 vocoder_input = postnet_output[0].transpose(0, 1).unsqueeze(0)
@@ -192,10 +213,10 @@ class Synthesizer(object):
         return wavs
 
         
-def tts(self, text, speaker_id=None, style_wav=None):
+def tts(self, text, speaker_id=None, style_wav=None, speaker_embedding=None):
         start_time = time.time()
         
-        wavs = self.tts_wav(text, speaker_id, style_wav)
+        wavs = self.tts_wav(text, speaker_id, style_wav, speaker_embedding)
 
         out = io.BytesIO()
         self.save_wav(wavs, out)
