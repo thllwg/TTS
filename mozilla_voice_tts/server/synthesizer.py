@@ -17,6 +17,8 @@ from mozilla_voice_tts.tts.utils.synthesis import *
 
 from mozilla_voice_tts.tts.utils.text import make_symbols, phonemes, symbols
 
+import json
+
 
 class Synthesizer(object):
     def __init__(self, config):
