@@ -82,7 +82,7 @@ class Synthesizer(object):
             num_speakers = len(self.tts_speakers)
         else:
             num_speakers = 0
-        self.tts_model = setup_model(self.input_size, num_speakers=num_speakers, c=self.tts_config, speaker_embedding_dim)
+        self.tts_model = setup_model(self.input_size, num_speakers=num_speakers, c=self.tts_config, speaker_embedding_dim=speaker_embedding_dim)
         # load model state
         cp = torch.load(tts_checkpoint, map_location=torch.device('cpu'))
         # load the model
