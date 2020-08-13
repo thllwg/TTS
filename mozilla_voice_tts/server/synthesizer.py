@@ -69,7 +69,7 @@ class Synthesizer(object):
         
         # load speakers
         if self.config.tts_speakers is not None:
-            speaker_mapping = json.load(open(self.config.tts_speakers, 'r'))
+            speaker_mapping = json.load(open(self.config.tts_speakers+"/config.json", 'r'))
             num_speakers = len(speaker_mapping)
             if self.tts_config.use_external_speaker_embedding_file:
                 #if self.config.speaker_fileid is not None:
